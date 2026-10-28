@@ -155,11 +155,36 @@ footer{max-width:850px;margin:auto;padding:0 16px;color:#64756b;font-size:11px;l
     const radius=Number($("radius").value),limit=Number($("limit").value);
     $("status").textContent="FamilyMartを検索しています… 公共の地図データへの接続に少し時間がかかることがあります。";
     $("locate").disabled=true;$("refresh").disabled=true;
-    const query=`[out:json][timeout:25];(node["shop"="convenience"]["name"~"FamilyMart|ファミリーマート",i](around:${radius},${current.lat},${current.lon});way["shop"="convenience"]["name"~"FamilyMart|ファミリーマート",i](around:${radius},${current.lat},${current.lon});relation["shop"="convenience"]["name"~"FamilyMart|ファミリーマート",i](around:${radius},${current.lat},${current.lon}););out center tags;`;
+    // Public Overpass instances can be busy. Try them sequentially with a timeout.
+    // These are best-effort public endpoints; none guarantees uninterrupted service.
+    const endpoints=[
+      "https://maps.mail.ru/osm/tools/overpass/api/interpreter",
+      "https://overpass.private.coffee/api/interpreter",
+      "https://overpass-api.de/api/interpreter"
+    ];
+    const query=`[out:json][timeout:18];(node["shop"="convenience"]["name"~"FamilyMart|ファミリーマート",i](around:${radius},${current.lat},${current.lon});way["shop"="convenience"]["name"~"FamilyMart|ファミリーマート",i](around:${radius},${current.lat},${current.lon});relation["shop"="convenience"]["name"~"FamilyMart|ファミリーマート",i](around:${radius},${current.lat},${current.lon}););out center tags;`;
     try{
-      const res=await fetch("https://overpass-api.de/api/interpreter",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8"},body:"data="+encodeURIComponent(query)});
-      if(!res.ok)throw new Error("地図検索APIエラー ("+res.status+")");
-      const data=await res.json(),seen=new Set(),found=[];
+      let data=null, failures=[];
+      for(let i=0;i<endpoints.length;i++){
+        const endpoint=endpoints[i];
+        $("status").textContent=`FamilyMartを検索しています…（地図サーバー ${i+1}/${endpoints.length} を確認中）`;
+        const controller=new AbortController();
+        const timeout=setTimeout(()=>controller.abort(),15000);
+        try{
+          const res=await fetch(endpoint,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8"},body:"data="+encodeURIComponent(query),signal:controller.signal});
+          if(!res.ok)throw new Error("HTTP "+res.status);
+          const candidate=await res.json();
+          if(!candidate || !Array.isArray(candidate.elements))throw new Error("応答データが不正です");
+          data=candidate;
+          break;
+        }catch(err){
+          failures.push(`${new URL(endpoint).hostname}: ${err.name==="AbortError"?"タイムアウト":err.message}`);
+        }finally{
+          clearTimeout(timeout);
+        }
+      }
+      if(!data)throw new Error("すべての地図検索APIで失敗しました。少し時間をおいて再試行してください。\n"+failures.join("\n"));
+      const seen=new Set(),found=[];
       for(const el of data.elements||[]){
         const lat=el.lat??el.center?.lat,lon=el.lon??el.center?.lon;
         if(typeof lat!=="number"||typeof lon!=="number")continue;
@@ -174,7 +199,7 @@ footer{max-width:850px;margin:auto;padding:0 16px;color:#64756b;font-size:11px;l
         ? `検索完了: ${stores.length} 店舗を表示します（取得候補 ${found.length} 店舗）。位置・名称は地図データ由来で、最新性や完全性は保証されません。`
         : "この範囲でFamilyMartが見つかりませんでした。範囲を広げるか、時間をおいて再検索してください。";
     }catch(e){
-      $("status").textContent="店舗検索に失敗しました: "+e.message+"\n通信状態を確認して再試行してください。";
+      $("status").textContent="店舗検索に失敗しました: "+e.message+"\n通信状態を確認し、少し時間をおいて再試行してください。";
     }finally{$("locate").disabled=false;$("refresh").disabled=false;}
   }
   async function locateAndSearch(){
