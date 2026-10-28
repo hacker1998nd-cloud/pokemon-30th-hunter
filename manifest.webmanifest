@@ -1,0 +1,11 @@
+{
+  "name": "Pokémon 30th Hunter",
+  "short_name": "30th Hunter",
+  "description": "FamilyMart巡回ルートとチェック履歴",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f3f7f5",
+  "theme_color": "#087f5b",
+  "icons": []
+}

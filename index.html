@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#087f5b">
+<meta name="description" content="現在地からFamilyMartを探して、ポケモンカード探しの巡回順を管理するツール">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<title>Pokémon 30th Hunter</title>
+<style>
+:root{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;color:#16231e;background:#f3f7f5;--green:#087f5b;--line:#d9e5df}
+*{box-sizing:border-box}body{margin:0;padding:0 0 calc(24px + env(safe-area-inset-bottom))}
+header{background:linear-gradient(135deg,#087f5b,#075c49);color:white;padding:20px 16px 18px}
+header h1{font-size:23px;margin:0 0 5px}header p{margin:0;font-size:13px;opacity:.92}
+main{max-width:850px;margin:auto;padding:14px}
+.panel{background:white;border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:12px;box-shadow:0 2px 8px #193c2a0a}
+.actions{display:flex;gap:8px;flex-wrap:wrap}.btn{border:0;border-radius:11px;background:var(--green);color:white;padding:12px 14px;font-size:14px;font-weight:700;cursor:pointer;min-height:44px}.btn.secondary{background:#e7f2ed;color:#075c49}.btn.dark{background:#253b32}.btn:disabled{opacity:.55;cursor:wait}
+.settings{display:grid;grid-template-columns:1fr 1fr;gap:10px}.field label{display:block;font-size:12px;color:#53665c;margin-bottom:5px}.field select{width:100%;padding:10px;border:1px solid #cbd9d1;border-radius:9px;background:white;font-size:14px}
+#status{font-size:13px;line-height:1.5;margin-top:10px;color:#44594e;white-space:pre-wrap}.warning{font-size:12px;line-height:1.5;color:#72511a;background:#fff7df;padding:10px;border-radius:10px;margin-top:10px}
+#map{height:330px;border-radius:12px;overflow:hidden;background:#e7eeea}.stats{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}.stat{background:#edf5f0;border-radius:9px;padding:8px 10px;font-size:12px}
+.store{border:1px solid var(--line);border-radius:12px;padding:12px;margin-top:9px;display:grid;grid-template-columns:1fr auto;gap:10px}.store h3{font-size:15px;margin:0 0 4px}.muted{color:#66776d;font-size:12px;line-height:1.5}.store .order{font-weight:800;color:var(--green);font-size:12px}.store select{margin-top:8px;max-width:100%;padding:8px;border:1px solid #cbd9d1;border-radius:8px;background:white}
+.store-actions{display:flex;flex-direction:column;gap:6px}.store-actions a{display:block;text-decoration:none;text-align:center;padding:9px 10px;border-radius:9px;background:#e7f2ed;color:#075c49;font-weight:700;font-size:12px;white-space:nowrap}
+.small{font-size:11px;color:#66776d}.empty{padding:20px;text-align:center;color:#66776d;font-size:13px}
+footer{max-width:850px;margin:auto;padding:0 16px;color:#64756b;font-size:11px;line-height:1.5}
+@media(min-width:680px){#map{height:420px}.store{grid-template-columns:1fr auto}}
+</style>
+</head>
+<body>
+<header>
+  <h1>🎴 Pokémon 30th Hunter</h1>
+  <p>FamilyMart巡回ルート管理 · 現在地から半径5km</p>
+</header>
+<main>
+  <section class="panel">
+    <div class="settings">
+      <div class="field"><label for="radius">検索範囲</label><select id="radius"><option value="1000">1 km</option><option value="3000">3 km</option><option value="5000" selected>5 km</option></select></div>
+      <div class="field"><label for="limit">店舗数上限</label><select id="limit"><option>5</option><option>10</option><option selected>15</option><option>25</option></select></div>
+    </div>
+    <div class="actions" style="margin-top:12px">
+      <button id="locate" class="btn">📍 現在地から店舗検索</button>
+      <button id="refresh" class="btn secondary">再検索</button>
+    </div>
+    <div id="status" role="status">位置情報の利用を許可して「現在地から店舗検索」を押してください。</div>
+    <div class="warning">在庫情報は取得していません。FamilyMartの位置情報を地図データから検索し、カードの在庫状況は自分で確認して記録するアプリです。店舗データが欠けている場合もあります。</div>
+  </section>
+
+  <section class="panel">
+    <strong>地図</strong>
+    <div id="map" style="margin-top:10px"></div>
+    <div class="stats">
+      <span class="stat" id="storeCount">店舗: 0</span>
+      <span class="stat" id="checkedCount">確認済み: 0</span>
+      <span class="stat" id="routeDistance">直線目安: —</span>
+    </div>
+    <div class="actions">
+      <button id="openRoute" class="btn">🚲 Google Mapsで巡回</button>
+      <button id="clear" class="btn secondary">チェック履歴をリセット</button>
+    </div>
+    <p class="small">巡回順は直線距離を使った簡易最短近傍順です。自転車専用道路や実際の道路距離を最適化したものではありません。Google Maps側で経路を確認してください。</p>
+  </section>
+
+  <section class="panel">
+    <strong>店舗リスト・チェック記録</strong>
+    <p class="muted">状態はこの端末のブラウザに保存されます。別の端末やブラウザとは同期されません。</p>
+    <div id="stores"><div class="empty">まだ店舗を検索していません。</div></div>
+  </section>
+</main>
+<footer>店舗検索: OpenStreetMap / Overpass API · 地図: Leaflet / OpenStreetMap · 経路案内: Google Maps<br>公共APIは混雑時に遅延・制限される場合があります。位置情報は検索リクエストのために使用し、このアプリ独自のサーバーには送信しません。</footer>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<script>
+(() => {
+  "use strict";
+  const $ = id => document.getElementById(id);
+  const STORAGE_KEY = "pokemon30thHunter.v1";
+  let current = null, stores = [], route = [], markers = [], userMarker = null, circle = null;
+  const map = L.map("map").setView([34.7025,135.4959],13);
+  L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom:19, attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+  }).addTo(map);
+
+  function loadState(){ try{return JSON.parse(localStorage.getItem(STORAGE_KEY)||"{}");}catch{return {};} }
+  function saveState(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(loadState())); }
+  function savedStatus(id){ return loadState()[id]?.status || "unchecked"; }
+  function savedTime(id){ return loadState()[id]?.time || ""; }
+  function setStatus(id,status){
+    const all=loadState();
+    all[id]={status,time:new Date().toLocaleString("ja-JP")};
+    localStorage.setItem(STORAGE_KEY,JSON.stringify(all));
+    renderStores();
+  }
+  function distance(a,b){
+    const R=6371000,rad=x=>x*Math.PI/180;
+    const dLat=rad(b.lat-a.lat),dLon=rad(b.lon-a.lon);
+    const x=Math.sin(dLat/2)**2+Math.cos(rad(a.lat))*Math.cos(rad(b.lat))*Math.sin(dLon/2)**2;
+    return 2*R*Math.asin(Math.sqrt(x));
+  }
+  function fmtDistance(m){return m<1000?Math.round(m)+" m":(m/1000).toFixed(1)+" km";}
+  function escapeHtml(s){return String(s||"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+  function storeId(s){return "osm-"+s.id;}
+  function clearMarkers(){
+    markers.forEach(m=>map.removeLayer(m)); markers=[];
+    if(userMarker){map.removeLayer(userMarker);userMarker=null;}
+    if(circle){map.removeLayer(circle);circle=null;}
+  }
+  function optimize(){
+    if(!current){route=[...stores];return;}
+    const left=[...stores],out=[];let point=current;
+    while(left.length){
+      let best=0,bestD=Infinity;
+      left.forEach((s,i)=>{const d=distance(point,s);if(d<bestD){bestD=d;best=i;}});
+      const next=left.splice(best,1)[0];out.push(next);point=next;
+    }
+    route=out;
+  }
+  function renderMap(){
+    clearMarkers();
+    if(!current)return;
+    userMarker=L.marker([current.lat,current.lon]).addTo(map).bindPopup("現在地");
+    circle=L.circle([current.lat,current.lon],{radius:Number($("radius").value),color:"#087f5b",fillOpacity:.05}).addTo(map);
+    const bounds=[ [current.lat,current.lon] ];
+    route.forEach((s,i)=>{
+      const m=L.marker([s.lat,s.lon]).addTo(map).bindPopup(`<b>${i+1}. ${escapeHtml(s.name)}</b><br>${escapeHtml(s.address||"住所データなし")}`);
+      markers.push(m);bounds.push([s.lat,s.lon]);
+    });
+    if(bounds.length>1)map.fitBounds(bounds,{padding:[20,20],maxZoom:15});else map.setView(bounds[0],15);
+  }
+  function renderStores(){
+    const root=$("stores");
+    $("storeCount").textContent="店舗: "+stores.length;
+    const checked=stores.filter(s=>savedStatus(storeId(s))!=="unchecked").length;
+    $("checkedCount").textContent="確認済み: "+checked;
+    let total=0,prev=current;
+    route.forEach(s=>{total+=distance(prev,s);prev=s;});
+    $("routeDistance").textContent="直線目安: "+(route.length?fmtDistance(total):"—");
+    if(!route.length){root.innerHTML='<div class="empty">まだ店舗を検索していません。</div>';return;}
+    root.innerHTML=route.map((s,i)=>{
+      const id=storeId(s),status=savedStatus(id),time=savedTime(id);
+      const options=[["unchecked","未確認"],["available","在庫あり（自分で確認）"],["soldout","売り切れ確認"],["not_sold","取扱なし確認"]];
+      const opts=options.map(([v,label])=>`<option value="${v}" ${status===v?"selected":""}>${label}</option>`).join("");
+      const google=`https://www.google.com/maps/dir/?api=1&destination=${s.lat},${s.lon}&travelmode=bicycling`;
+      return `<article class="store">
+        <div><div class="order">STOP ${i+1} · ${fmtDistance(distance(current,s))} from start</div>
+        <h3>${escapeHtml(s.name)}</h3><div class="muted">${escapeHtml(s.address||"住所データなし")}</div>
+        <select aria-label="在庫チェック状態" data-status-id="${id}">${opts}</select>
+        <div class="small">${time?"更新: "+escapeHtml(time):"未記録"}</div></div>
+        <div class="store-actions"><a href="${google}" target="_blank" rel="noopener">ここへ案内 ↗</a><a href="https://www.google.com/maps/search/?api=1&query=${s.lat},${s.lon}" target="_blank" rel="noopener">地図を見る ↗</a></div>
+      </article>`;
+    }).join("");
+    root.querySelectorAll("select[data-status-id]").forEach(el=>el.addEventListener("change",()=>setStatus(el.dataset.statusId,el.value)));
+  }
+  async function searchStores(){
+    if(!current){await locateAndSearch();return;}
+    const radius=Number($("radius").value),limit=Number($("limit").value);
+    $("status").textContent="FamilyMartを検索しています… 公共の地図データへの接続に少し時間がかかることがあります。";
+    $("locate").disabled=true;$("refresh").disabled=true;
+    const query=`[out:json][timeout:25];(node["shop"="convenience"]["name"~"FamilyMart|ファミリーマート",i](around:${radius},${current.lat},${current.lon});way["shop"="convenience"]["name"~"FamilyMart|ファミリーマート",i](around:${radius},${current.lat},${current.lon});relation["shop"="convenience"]["name"~"FamilyMart|ファミリーマート",i](around:${radius},${current.lat},${current.lon}););out center tags;`;
+    try{
+      const res=await fetch("https://overpass-api.de/api/interpreter",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded;charset=UTF-8"},body:"data="+encodeURIComponent(query)});
+      if(!res.ok)throw new Error("地図検索APIエラー ("+res.status+")");
+      const data=await res.json(),seen=new Set(),found=[];
+      for(const el of data.elements||[]){
+        const lat=el.lat??el.center?.lat,lon=el.lon??el.center?.lon;
+        if(typeof lat!=="number"||typeof lon!=="number")continue;
+        const s={id:el.id,lat,lon,name:el.tags?.name||"FamilyMart",address:[el.tags?.["addr:city"],el.tags?.["addr:street"],el.tags?.["addr:housenumber"]].filter(Boolean).join(" ")};
+        if(distance(current,s)>radius)continue;
+        const key=lat.toFixed(5)+","+lon.toFixed(5);if(seen.has(key))continue;seen.add(key);found.push(s);
+      }
+      found.sort((a,b)=>distance(current,a)-distance(current,b));
+      stores=found.slice(0,limit);
+      optimize();renderMap();renderStores();
+      $("status").textContent=stores.length
+        ? `検索完了: ${stores.length} 店舗を表示します（取得候補 ${found.length} 店舗）。位置・名称は地図データ由来で、最新性や完全性は保証されません。`
+        : "この範囲でFamilyMartが見つかりませんでした。範囲を広げるか、時間をおいて再検索してください。";
+    }catch(e){
+      $("status").textContent="店舗検索に失敗しました: "+e.message+"\n通信状態を確認して再試行してください。";
+    }finally{$("locate").disabled=false;$("refresh").disabled=false;}
+  }
+  async function locateAndSearch(){
+    if(!navigator.geolocation){$("status").textContent="このブラウザは位置情報に対応していません。";return;}
+    $("locate").disabled=true;$("status").textContent="GPSで現在地を取得しています…";
+    navigator.geolocation.getCurrentPosition(async pos=>{
+      current={lat:pos.coords.latitude,lon:pos.coords.longitude};
+      await searchStores();
+    },err=>{
+      $("status").textContent="現在地を取得できません: "+({"1":"位置情報の許可が必要です。","2":"現在地を取得できませんでした。","3":"位置情報の取得がタイムアウトしました。"}[err.code]||err.message);
+      $("locate").disabled=false;
+    },{enableHighAccuracy:true,timeout:15000,maximumAge:60000});
+  }
+  $("locate").addEventListener("click",locateAndSearch);
+  $("refresh").addEventListener("click",searchStores);
+  $("radius").addEventListener("change",()=>{if(current)searchStores();});
+  $("limit").addEventListener("change",()=>{if(current)searchStores();});
+  $("openRoute").addEventListener("click",()=>{
+    if(!current||!route.length){alert("先に現在地から店舗検索をしてください。");return;}
+    // Google Maps URLs have waypoint limits; open in groups of up to 9 destinations.
+    const batch=route.slice(0,9);
+    const params=new URLSearchParams({api:"1",origin:`${current.lat},${current.lon}`,destination:`${batch[batch.length-1].lat},${batch[batch.length-1].lon}`,travelmode:"bicycling"});
+    if(batch.length>1)params.set("waypoints",batch.slice(0,-1).map(s=>`${s.lat},${s.lon}`).join("|"));
+    window.open("https://www.google.com/maps/dir/?"+params.toString(),"_blank","noopener");
+    if(route.length>9)$("status").textContent="Google Mapsの1ルートには最初の9店舗までを設定しました。残りは店舗ごとの「ここへ案内」から進んでください。";
+  });
+  $("clear").addEventListener("click",()=>{
+    if(confirm("この端末に保存されたすべてのチェック履歴を削除しますか？")){
+      localStorage.removeItem(STORAGE_KEY);renderStores();
+    }
+  });
+  if("serviceWorker" in navigator && location.protocol.startsWith("http")){
+    window.addEventListener("load",()=>navigator.serviceWorker.register("./sw.js").catch(()=>{}));
+  }
+})();
+</script>
+</body>
+</html>
